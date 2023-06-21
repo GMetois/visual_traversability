@@ -4,6 +4,7 @@
 #include "sensor_msgs/Image.h"
 #include <sensor_msgs/image_encodings.h>
 #include <image_transport/image_transport.h>
+#include <eigen3/Eigen/Dense>
 
 int main(int argc, char const *argv[])
 {
