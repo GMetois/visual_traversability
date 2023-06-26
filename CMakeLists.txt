@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.0.2)
 project(visual_traversability)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
-# add_compile_options(-std=c++11)
+list(APPEND CMAKE_PREFIX_PATH "/home/gabriel/LibTorch")
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -16,8 +16,9 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 ## System dependencies are found with CMake's conventions
-find_package(OpenCV REQUIRED)
+find_package(OpenCV 4.2.0 REQUIRED)
 find_package(Eigen3 REQUIRED)
+#find_package(Torch REQUIRED)
 
 
 ## Uncomment this if the package has a setup.py. This macro ensures
@@ -108,7 +109,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package(
   INCLUDE_DIRS include
 #  LIBRARIES visual_traversability
-  CATKIN_DEPENDS roscpp rospy std_msgs cv_bridge sensor_msgs
+  CATKIN_DEPENDS roscpp rospy std_msgs cv_bridge sensor_msgs tf2 tf2_ros
 #  DEPENDS system_lib
 )
 
@@ -151,9 +152,11 @@ add_executable(${PROJECT_NAME}_node src/visual_traversability.cpp)
 # add_dependencies(${PROJECT_NAME}_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
-# target_link_libraries(${PROJECT_NAME}_node
-#   ${catkin_LIBRARIES}
-# )
+ target_link_libraries(${PROJECT_NAME}_node
+   ${catkin_LIBRARIES}
+   ${OpenCV_LIBS}
+   ${TORCH_LIBRARIES}
+ )
 
 #############
 ## Install ##

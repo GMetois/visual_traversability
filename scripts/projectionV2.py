@@ -25,6 +25,8 @@ import robot
 import frames
 
 # Setting some custom made parameters
+VISUALIZE = False
+RECORD = True
     
 # (Constant) Transform matrix from the IMU frame to the camera frame
 RESOLUTION = 0.10
@@ -44,9 +46,9 @@ K = np.array([[1067, 0, 943],
 WORLD_TO_ROBOT = np.eye(4)  # The trajectory is directly generated in the robot frame
 # Compute the inverse transform
 ROBOT_TO_WORLD = frames.inverse_transform_matrix(WORLD_TO_ROBOT)
-X = 60
-Y = 40
-IMG_DIR = "/home/gabriel/Bureau/PRE/src/costmap/test_images/tom_full1/frame000000.png"
+X = 30
+Y = 20
+VID_DIR = "/home/gabriel/output.avi"
 CROP_WIDTH = 210
 CROP_HEIGHT = 70
 IMAGE_H, IMAGE_W = 720, 1080
@@ -104,6 +106,8 @@ class Projection :
         #img = cv2.imread(IMG_DIR, cv2.IMREAD_COLOR)
         #self.rectangle_list, self.grid_list = self.get_lists()
         self.sub_image = rospy.Subscriber(self.IMAGE_TOPIC, Image, self.callback_image, queue_size=1)
+        if RECORD :
+            self.writer = cv2.VideoWriter(VID_DIR, cv2.VideoWriter_fourcc(*'XVID'), 3, (1920,1080))
 
     def get_corners(self, x, y) :
         """
@@ -271,7 +275,45 @@ class Projection :
         
         cv2.imshow("Result", imgviz)
         cv2.imshow("Costmap", cv2.resize(cv2.flip(costmapviz, 0),(X*20,Y*20)))
-        cv2.waitKey(16)    
+        cv2.waitKey(16)   
+
+    def record(self, img, costmap, rectangle_list, grid_list, max_cost, min_cost) :
+        imgviz = img.copy()
+        costmapviz = np.zeros((Y,X,3), np.uint8)
+    
+        for x in range(X):
+            for y in range(Y):
+                rectangle = rectangle_list[y,x]
+                if not np.array_equal(rectangle, np.zeros(rectangle.shape)) :
+                    rect_tl, rect_br = rectangle[0], rectangle[1]
+                    points_image = grid_list[y,x]
+    
+                    # Displaying the results for validation on the main image
+                    centroid = np.mean(points_image, axis=0)
+                    cv2.circle(imgviz, tuple(np.int32(centroid)) , radius=4, color=(255,0,0), thickness=-1)
+                    rect_tl = tuple(rect_tl)
+                    rect_br = tuple(rect_br)
+                    cv2.rectangle(imgviz, rect_tl, rect_br, (255,0,0), 1)
+                    points_image_reshape = points_image.reshape((-1,1,2))
+                    cv2.polylines(imgviz,np.int32([points_image_reshape]),True,(0,255,255))
+    
+        for x in range(X) :
+            for y in range(Y) :
+                if costmap[y,x]!= 0 :
+                    value = np.uint8(((costmap[y,x]-min_cost)/(max_cost-min_cost))*255)
+                    costmapviz[y,x] = (value, value, value)
+        costmapviz = cv2.applyColorMap(src=costmapviz, colormap=cv2.COLORMAP_JET)
+        for x in range(X) :
+            for y in range(Y) :
+                if costmap[y,x]== 0 :
+                    costmapviz[y,x] = (0, 0, 0)
+
+        imgviz_resized = cv2.resize(imgviz[:,:,:3], (np.int32(self.imgw/2), np.int32(self.imgh/2)))
+        costmapviz = cv2.resize(cv2.flip(costmapviz, 0),(np.int32(self.imgw/2), np.int32(self.imgh/2)))
+        print(np.shape(imgviz_resized), "\n", np.shape(costmapviz))
+        result = np.vstack((imgviz_resized, costmapviz))
+        result_borders = cv2.copyMakeBorder(result, 0, 0, np.int32(self.imgw/4), np.int32(self.imgw/4), cv2.BORDER_CONSTANT, value=(0,0,0))
+        self.writer.write(result_borders)
 
     def callback_image(self, msg) :
         #time_start = rospy.get_rostime()
@@ -281,7 +323,11 @@ class Projection :
             self.rectangle_list, self.grid_list = self.get_lists()
             self.initialized = True
         costmap, min_cost, max_cost = self.predict_costs(self.img, self.rectangle_list, self.model, self.transform)
-        self.visualize(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+        if VISUALIZE :
+            self.visualize(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+        if RECORD :
+            self.record(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+            print("Recording this frame")
         #time_stop = rospy.get_rostime()
         #self.time_wait = np.int32((time_stop.secs - time_start.secs) * 1000)
         #print(self.time_wait)
@@ -295,4 +341,6 @@ if __name__ == "__main__" :
     projection = Projection()
 
     rospy.spin()
+    if RECORD :
+        projection.writer.release()
     cv2.destroyAllWindows()

@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="visual_traversability" type="projectionV2.py" name="visual_traversability" output="screen">
+    </node>
+</launch>
