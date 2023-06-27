@@ -25,10 +25,11 @@ import robot
 import frames
 
 # Setting some custom made parameters
-VISUALIZE = False
-RECORD = True
+VISUALIZE = True
+RECORD = False
     
 # (Constant) Transform matrix from the IMU frame to the camera frame
+L_ROBOT = 0.67
 RESOLUTION = 0.10
 ALPHA = -0.197  # Camera tilt (approx -11.3 degrees)
 ROBOT_TO_CAM = np.array([[0, np.sin(ALPHA), np.cos(ALPHA), 0.084],
@@ -156,8 +157,8 @@ class Projection :
         else :
             offset = (X // 2)
     
-        for x in range(X):
-            for y in range(Y):
+        for x in [13]:
+            for y in [10]:
                 points_costmap = self.get_corners(x, y)
                 points_robot = points_costmap - np.array([(offset, 0, 0)])
                 # Strange computation because the robot frame has the x axis toward the back of the robot
@@ -173,6 +174,7 @@ class Projection :
     
                 # Compute the points coordinates in the image plan
                 points_image = frames.camera_frame_to_image(points_camera, K)
+                print("Points image\n", points_image)
                 grid_list[y,x] = points_image
     
                 # Get the Area of the cell that is in the image
@@ -185,14 +187,38 @@ class Projection :
                 # If the area in squared pixels of the costmap cell is big enough, then relevant data can be extracted
                 if intern_area/area >= THRESHOLD_INTERSECT and area >= THRESHOLD_AREA :
                 
+                    print("entering the if")
+
                     # Get the rectangle inside the points for the NN
-                    centroid = np.mean(points_image, axis=0)
-                    crop_width = np.int32(np.min([self.imgw,np.max(points_image[:,0])])-np.max([0,np.min(points_image[:,0])]))
+                    #centroid = np.mean(points_image, axis=0)
+                    #crop_width = np.int32(np.min([self.imgw,np.max(points_image[:,0])])-np.max([0,np.min(points_image[:,0])]))
+                    #crop_height = np.int32(crop_width//3)
+                    #tl_x = np.clip(centroid[0] - crop_width//2, 0, self.imgw-crop_width)
+                    #tl_y = np.clip(centroid[1]-crop_height//2, 0, self.imgh-crop_height)
+                    #rect_tl = np.int32([tl_x, tl_y])
+                    #rect_br = rect_tl + [crop_width, crop_height]
+
+                    centroid = np.mean(points_camera, axis=0)
+                    point_tl = centroid - [0.5*L_ROBOT, 0, 0]
+                    point_br = centroid + [0.5*L_ROBOT, 0, 0]
+                    print("Points camera\n", [point_tl, point_br])
+                    point_tl = frames.apply_rigid_motion(point_tl, CAM_TO_ROBOT)
+                    point_br = frames.apply_rigid_motion(point_br, CAM_TO_ROBOT)
+                    point_tl = frames.camera_frame_to_image(point_tl, K)
+                    point_br = frames.camera_frame_to_image(point_br, K)
+                    point_tl = point_tl[0]
+                    point_br = point_br[0]
+                    print("Points Image\n", [point_tl, point_br])
+                    crop_width = np.int32(np.min([self.imgw,point_br[0]])-np.max([0,point_tl[0]]))
                     crop_height = np.int32(crop_width//3)
+                    print("Dimensions\n", [crop_width, crop_height])
+                    
+                    centroid = np.mean(points_image, axis=0)
                     tl_x = np.clip(centroid[0] - crop_width//2, 0, self.imgw-crop_width)
                     tl_y = np.clip(centroid[1]-crop_height//2, 0, self.imgh-crop_height)
                     rect_tl = np.int32([tl_x, tl_y])
                     rect_br = rect_tl + [crop_width, crop_height]
+
                     rectangle_list[y,x] = np.array([rect_tl, rect_br])
     
         return(rectangle_list, grid_list)
