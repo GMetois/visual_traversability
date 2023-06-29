@@ -12,25 +12,25 @@ import cv2
 import torch
 import torch.nn as nn
 from torchvision import transforms
-import torchvision.models as models
+import torchvision.models
 import PIL
 import time
 import sys
 import os
 
 # Importing custom made parameters
-sys.path.append(os.path.abspath("/home/gabriel/Bureau/PRE/src/params/params"))
-sys.path.append(os.path.abspath("/home/gabriel/Bureau/PRE/src/ultils/utils"))
-import robot
-import frames
+from params import robot
+from params import learning
+from params import dataset
+from depth import utils as depth
+import utilities.frames as frames
+from models import ResNet18Velocity
 
 # Setting some custom made parameters
-VISUALIZE = True
-RECORD = False
+VISUALIZE = False
+RECORD = True
     
 # (Constant) Transform matrix from the IMU frame to the camera frame
-L_ROBOT = 0.67
-RESOLUTION = 0.10
 ALPHA = -0.197  # Camera tilt (approx -11.3 degrees)
 ROBOT_TO_CAM = np.array([[0, np.sin(ALPHA), np.cos(ALPHA), 0.084],
                          [-1, 0, 0, 0.060],
@@ -47,23 +47,30 @@ K = np.array([[1067, 0, 943],
 WORLD_TO_ROBOT = np.eye(4)  # The trajectory is directly generated in the robot frame
 # Compute the inverse transform
 ROBOT_TO_WORLD = frames.inverse_transform_matrix(WORLD_TO_ROBOT)
-X = 30
-Y = 20
+
+X = 10
+Y = 15
+L_ROBOT = robot.L
+RESOLUTION = 0.20
 VID_DIR = "/home/gabriel/output.avi"
 CROP_WIDTH = 210
 CROP_HEIGHT = 70
 IMAGE_H, IMAGE_W = 720, 1080
 THRESHOLD_INTERSECT = 0.1
 THRESHOLD_AREA = 25
+NORMALIZE_PARAMS = learning.NORMALIZE_PARAMS
+VELOCITY = 0.2
 
 class Projection :
     
     # Initializing some ROS related parameters
     bridge = cv_bridge.CvBridge()
-    IMAGE_TOPIC = "/zed_node/rgb/image_rect_color"
-    ODOM_TOPIC = "/odometry/filtered"
+    IMAGE_TOPIC = robot.IMAGE_TOPIC
+    ODOM_TOPIC = robot.ODOM_TOPIC
+    DEPTH_TOPIC = robot.DEPTH_TOPIC
     imgh = IMAGE_H
     imgw = IMAGE_W
+    wait_for_depth = True
     
     # Initializing some PyTorch related parameters
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -80,24 +87,27 @@ class Projection :
         # Mean and standard deviation were pre-computed on the training data
         # (on the ImageNet dataset)
         transforms.Normalize(
-            mean=[0.3426, 0.3569, 0.2914],
-            std=[0.1363, 0.1248, 0.1302]
+            mean=NORMALIZE_PARAMS["rbg"]["mean"],
+            std=NORMALIZE_PARAMS["rbg"]["std"]
         ),
     ])
-    model = models.resnet18().to(device=device)
-    model.fc = nn.Linear(model.fc.in_features, 10, device=device)
+    model = ResNet18Velocity.ResNet18Velocity(**learning.NET_PARAMS).to(device=device)
     
-    model.load_state_dict(torch.load("/home/gabriel/Bureau/PRE/src/models_development/models_parameters/resnet18/resnet18_classification.params"))
+    model.load_state_dict(torch.load("/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity/2023-06-28-16-39-21.params"))
     model.eval()
     
     midpoints = np.array([[0.43156512],[0.98983318],[1.19973744],[1.35943443],[1.51740755],[1.67225206],[1.80821536],[1.94262708],[2.12798895],[2.6080252]])
     
     #Buffer for the image and grids
     img = np.zeros((imgh, imgw, 3))
+    img_depth = np.zeros((imgh, imgw, 1))
+    img_normals = np.zeros((imgh, imgw, 3))
     rectangle_list = np.zeros((Y,X,2,2), np.int32)
     grid_list = np.zeros((Y,X,4,2), np.int32)
     initialized = False
     time_wait = 250
+    min_cost_global = sys.float_info.max
+    max_cost_global = sys.float_info.min
 
     ###### TO INSERT
 
@@ -107,8 +117,9 @@ class Projection :
         #img = cv2.imread(IMG_DIR, cv2.IMREAD_COLOR)
         #self.rectangle_list, self.grid_list = self.get_lists()
         self.sub_image = rospy.Subscriber(self.IMAGE_TOPIC, Image, self.callback_image, queue_size=1)
+        self.sub_depth = rospy.Subscriber(self.DEPTH_TOPIC, Image, self.callback_depth, queue_size=1)
         if RECORD :
-            self.writer = cv2.VideoWriter(VID_DIR, cv2.VideoWriter_fourcc(*'XVID'), 3, (1920,1080))
+            self.writer = cv2.VideoWriter(VID_DIR, cv2.VideoWriter_fourcc(*'XVID'), 24, (1920,1080))
 
     def get_corners(self, x, y) :
         """
@@ -157,8 +168,8 @@ class Projection :
         else :
             offset = (X // 2)
     
-        for x in [13]:
-            for y in [10]:
+        for x in range(X):
+            for y in range(Y):
                 points_costmap = self.get_corners(x, y)
                 points_robot = points_costmap - np.array([(offset, 0, 0)])
                 # Strange computation because the robot frame has the x axis toward the back of the robot
@@ -174,7 +185,6 @@ class Projection :
     
                 # Compute the points coordinates in the image plan
                 points_image = frames.camera_frame_to_image(points_camera, K)
-                print("Points image\n", points_image)
                 grid_list[y,x] = points_image
     
                 # Get the Area of the cell that is in the image
@@ -186,8 +196,6 @@ class Projection :
     
                 # If the area in squared pixels of the costmap cell is big enough, then relevant data can be extracted
                 if intern_area/area >= THRESHOLD_INTERSECT and area >= THRESHOLD_AREA :
-                
-                    print("entering the if")
 
                     # Get the rectangle inside the points for the NN
                     #centroid = np.mean(points_image, axis=0)
@@ -198,20 +206,17 @@ class Projection :
                     #rect_tl = np.int32([tl_x, tl_y])
                     #rect_br = rect_tl + [crop_width, crop_height]
 
-                    centroid = np.mean(points_camera, axis=0)
-                    point_tl = centroid - [0.5*L_ROBOT, 0, 0]
-                    point_br = centroid + [0.5*L_ROBOT, 0, 0]
-                    print("Points camera\n", [point_tl, point_br])
+                    centroid = np.mean(points_robot, axis=0)
+                    point_tl = centroid + [0, 0.5*L_ROBOT, 0]
+                    point_br = centroid - [0, 0.5*L_ROBOT, 0]
                     point_tl = frames.apply_rigid_motion(point_tl, CAM_TO_ROBOT)
                     point_br = frames.apply_rigid_motion(point_br, CAM_TO_ROBOT)
                     point_tl = frames.camera_frame_to_image(point_tl, K)
                     point_br = frames.camera_frame_to_image(point_br, K)
                     point_tl = point_tl[0]
                     point_br = point_br[0]
-                    print("Points Image\n", [point_tl, point_br])
                     crop_width = np.int32(np.min([self.imgw,point_br[0]])-np.max([0,point_tl[0]]))
                     crop_height = np.int32(crop_width//3)
-                    print("Dimensions\n", [crop_width, crop_height])
                     
                     centroid = np.mean(points_image, axis=0)
                     tl_x = np.clip(centroid[0] - crop_width//2, 0, self.imgw-crop_width)
@@ -223,7 +228,7 @@ class Projection :
     
         return(rectangle_list, grid_list)
     
-    def predict_costs(self, img, rectangle_list, model, transform):
+    def predict_costs(self, img, img_depth, img_normals, rectangle_list, model, transform):
     
         costmap = np.zeros((Y,X))
         min_cost = sys.float_info.max
@@ -237,6 +242,8 @@ class Projection :
                     # Convert the image from BGR to RGB
                     rectangle = rectangle_list[y,x]
                     crop = img[rectangle[0,1]:rectangle[1,1], rectangle[0,0]:rectangle[1,0]]
+                    depth_crop = img_depth[rectangle[0,1]:rectangle[1,1], rectangle[0,0]:rectangle[1,0]]
+                    normals_crop = img_normals[rectangle[0,1]:rectangle[1,1], rectangle[0,0]:rectangle[1,0]]
     
                     if not np.array_equal(rectangle, np.zeros(rectangle.shape)) :
                         
@@ -254,7 +261,7 @@ class Projection :
                         crop = crop.to(self.device)
     
                         # Computing the cost from the classification problem with the help of midpoints
-                        output = model(crop)
+                        output = model(crop, VELOCITY)
                         softmax = nn.Softmax(dim=1)
                         output = softmax(output)
                         output = output.cpu()[0]
@@ -336,27 +343,44 @@ class Projection :
 
         imgviz_resized = cv2.resize(imgviz[:,:,:3], (np.int32(self.imgw/2), np.int32(self.imgh/2)))
         costmapviz = cv2.resize(cv2.flip(costmapviz, 0),(np.int32(self.imgw/2), np.int32(self.imgh/2)))
-        print(np.shape(imgviz_resized), "\n", np.shape(costmapviz))
         result = np.vstack((imgviz_resized, costmapviz))
         result_borders = cv2.copyMakeBorder(result, 0, 0, np.int32(self.imgw/4), np.int32(self.imgw/4), cv2.BORDER_CONSTANT, value=(0,0,0))
         self.writer.write(result_borders)
 
     def callback_image(self, msg) :
-        #time_start = rospy.get_rostime()
-        self.img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-        if self.initialized == False :
-            self.imgh, self.imgw, _ = self.img.shape
-            self.rectangle_list, self.grid_list = self.get_lists()
-            self.initialized = True
-        costmap, min_cost, max_cost = self.predict_costs(self.img, self.rectangle_list, self.model, self.transform)
-        if VISUALIZE :
-            self.visualize(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
-        if RECORD :
-            self.record(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
-            print("Recording this frame")
-        #time_stop = rospy.get_rostime()
-        #self.time_wait = np.int32((time_stop.secs - time_start.secs) * 1000)
-        #print(self.time_wait)
+        if self.wait_for_depth == False :
+            self.img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+
+            if self.initialized == False :
+                self.imgh, self.imgw, _ = self.img.shape
+                self.rectangle_list, self.grid_list = self.get_lists()
+                self.initialized = True
+
+            costmap, min_cost, max_cost = self.predict_costs(self.img, self.img_depth, self.img_normals, self.rectangle_list, self.model, self.transform)
+            if self.min_cost_global > min_cost :
+                self.min_cost_global = min_cost
+            if self.max_cost_global < max_cost :
+                self.max_cost_global = max_cost
+
+            if VISUALIZE :
+                self.visualize(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+
+            if RECORD :
+                self.record(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+
+        self.wait_for_depth = True
+
+    def callback_depth(self, msg_depth) :
+        if self.wait_for_depth == True :
+            self.img_depth = self.bridge.imgmsg_to_cv2(msg_depth, desired_encoding="passthrough")
+            depthclass = depth.Depth(self.img_depth, dataset.DEPTH_RANGE)
+            depthclass.compute_normal(K = robot.K, bilateral_filter = dataset.BILATERAL_FILTER, gradient_threshold = dataset.GRADIENT_THR)
+
+            self.img_depth = depthclass.get_depth(fill = True, default_depth=dataset.DEPTH_RANGE[0], convert_range=True)
+
+            self.img_normals = depthclass.get_normal(fill = True, default_normal = dataset.DEFAULT_NORMAL, convert_range = True)
+            self.img_normals = cv2.cvtColor(self.img_normals, cv2.COLOR_BGR2RGB)
+            self.wait_for_depth = False
 
 
 # Main Program for testing
