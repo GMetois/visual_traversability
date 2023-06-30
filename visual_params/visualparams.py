@@ -20,7 +20,7 @@ from params import learning
 from params import dataset
 from depth import utils as depth
 import utilities.frames as frames
-import ResNet18Velocity
+from exportedmodels import ResNet18Velocity
 
 # Importing parameters relative to the robot size and configuration
 ALPHA = robot.alpha

@@ -6,7 +6,7 @@ DESCRIPTION = 'Parameters for the visual_traversability ROS Node'
 # Setting up
 setup(
        # The name must match the folder name 'params'
-        name="visualparams", 
+        name="visual_params", 
         version=VERSION,
         author="Gabriel Métois",
         author_email="<gabriel.metois@ensta-paris.fr>",
