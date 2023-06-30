@@ -4,7 +4,6 @@ import cv_bridge
 
 # Import useful ROS types
 from sensor_msgs.msg import Image
-from nav_msgs.msg import Odometry
 
 # Python librairies
 import numpy as np
@@ -12,114 +11,74 @@ import cv2
 import torch
 import torch.nn as nn
 from torchvision import transforms
-import torchvision.models
 import PIL
-import time
 import sys
-import os
 
 # Importing custom made parameters
-from params import robot
-from params import learning
-from params import dataset
 from depth import utils as depth
+from params import dataset
 import utilities.frames as frames
-from models import ResNet18Velocity
-
-# Setting some custom made parameters
-VISUALIZE = False
-RECORD = True
-    
-# (Constant) Transform matrix from the IMU frame to the camera frame
-ALPHA = -0.197  # Camera tilt (approx -11.3 degrees)
-ROBOT_TO_CAM = np.array([[0, np.sin(ALPHA), np.cos(ALPHA), 0.084],
-                         [-1, 0, 0, 0.060],
-                         [0, -np.cos(ALPHA), np.sin(ALPHA), 0.774],
-                         [0, 0, 0, 1]])
-# Inverse the transform
-CAM_TO_ROBOT = frames.inverse_transform_matrix(ROBOT_TO_CAM)
-# (Constant) Internal calibration matrix (approx focal length)
-K = np.array([[1067, 0, 943],
-            [0, 1067, 521],
-            [0, 0, 1]])
-
-# Compute the transform matrix between the world and the robot
-WORLD_TO_ROBOT = np.eye(4)  # The trajectory is directly generated in the robot frame
-# Compute the inverse transform
-ROBOT_TO_WORLD = frames.inverse_transform_matrix(WORLD_TO_ROBOT)
-
-X = 10
-Y = 15
-L_ROBOT = robot.L
-RESOLUTION = 0.20
-VID_DIR = "/home/gabriel/output.avi"
-CROP_WIDTH = 210
-CROP_HEIGHT = 70
-IMAGE_H, IMAGE_W = 720, 1080
-THRESHOLD_INTERSECT = 0.1
-THRESHOLD_AREA = 25
-NORMALIZE_PARAMS = learning.NORMALIZE_PARAMS
-VELOCITY = 0.2
+import visualparams as viz
 
 class Projection :
     
     # Initializing some ROS related parameters
     bridge = cv_bridge.CvBridge()
-    IMAGE_TOPIC = robot.IMAGE_TOPIC
-    ODOM_TOPIC = robot.ODOM_TOPIC
-    DEPTH_TOPIC = robot.DEPTH_TOPIC
-    imgh = IMAGE_H
-    imgw = IMAGE_W
-    wait_for_depth = True
+    IMAGE_TOPIC = viz.IMAGE_TOPIC
+    ODOM_TOPIC = viz.ODOM_TOPIC
+    DEPTH_TOPIC = viz.DEPTH_TOPIC
+    imgh = viz.IMAGE_H
+    imgw = viz.IMAGE_W
+    
+    # Costmap parameters
+    X = viz.X
+    Y = viz.Y
     
     # Initializing some PyTorch related parameters
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("Device: ", device, "\n")
+    print("Device: ", viz.DEVICE, "\n")
     
     # Initializing some parameters for the model
-    transform = transforms.Compose([ 
-        # transforms.Resize(100),
-        transforms.Resize((70, 210)),
-        # transforms.Grayscale(),
-        # transforms.CenterCrop(100),
-        # transforms.RandomCrop(100),
-        transforms.ToTensor(),
-        # Mean and standard deviation were pre-computed on the training data
-        # (on the ImageNet dataset)
-        transforms.Normalize(
-            mean=NORMALIZE_PARAMS["rbg"]["mean"],
-            std=NORMALIZE_PARAMS["rbg"]["std"]
-        ),
-    ])
-    model = ResNet18Velocity.ResNet18Velocity(**learning.NET_PARAMS).to(device=device)
+    transform = viz.TRANSFORM
+    transform_depth = viz.TRANSFORM_DEPTH
+    transform_normal = viz.TRANSFORM_NORMAL
+    device = viz.DEVICE
     
-    model.load_state_dict(torch.load("/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity/2023-06-28-16-39-21.params"))
+    model = viz.MODEL
+    model.load_state_dict(torch.load(viz.WEIGHTS))
     model.eval()
     
-    midpoints = np.array([[0.43156512],[0.98983318],[1.19973744],[1.35943443],[1.51740755],[1.67225206],[1.80821536],[1.94262708],[2.12798895],[2.6080252]])
+    midpoints = viz.MIDPOINTS
+    velocity = viz.VELOCITY
     
     #Buffer for the image and grids
     img = np.zeros((imgh, imgw, 3))
     img_depth = np.zeros((imgh, imgw, 1))
     img_normals = np.zeros((imgh, imgw, 3))
+    
+    #Buffer for the grids
     rectangle_list = np.zeros((Y,X,2,2), np.int32)
     grid_list = np.zeros((Y,X,4,2), np.int32)
+    
+    #Control variables
+    record = viz.RECORD
+    visualize = viz.VISUALIZE
     initialized = False
     time_wait = 250
     min_cost_global = sys.float_info.max
     max_cost_global = sys.float_info.min
+    wait_for_depth = True
 
     ###### TO INSERT
 
 
     def __init__(self) :
-         #INITIALIZATION
+        #INITIALIZATION
         #img = cv2.imread(IMG_DIR, cv2.IMREAD_COLOR)
         #self.rectangle_list, self.grid_list = self.get_lists()
         self.sub_image = rospy.Subscriber(self.IMAGE_TOPIC, Image, self.callback_image, queue_size=1)
         self.sub_depth = rospy.Subscriber(self.DEPTH_TOPIC, Image, self.callback_depth, queue_size=1)
-        if RECORD :
-            self.writer = cv2.VideoWriter(VID_DIR, cv2.VideoWriter_fourcc(*'XVID'), 24, (1920,1080))
+        if self.record :
+            self.writer = cv2.VideoWriter(viz.OUTPUT_DIR, cv2.VideoWriter_fourcc(*'XVID'), 24, (1920,1080))
 
     def get_corners(self, x, y) :
         """
@@ -159,32 +118,44 @@ class Projection :
             return result
     
     def get_lists(self) :
+        """
+        Setup the list of rectangles and lines that will be later used of inference
+
+        Args:
+            Nothing : O_o
+
+        Returns:
+            rectangle_list : a list of X*Y coordinates of the rectangle position indicating where to crop
+            grid_list : a list of X*Y coordinates to indicate the visual projection of the costmap on the display
+        """
     
-        rectangle_list = np.zeros((Y,X,2,2), np.int32)
-        grid_list = np.zeros((Y,X,4,2), np.int32)
+        rectangle_list = np.zeros((self.Y,self.X,2,2), np.int32)
+        grid_list = np.zeros((self.Y,self.X,4,2), np.int32)
     
-        if X % 2 == 1 :
-            offset = X // 2 + 0.5
+        if self.X % 2 == 1 :
+            offset = self.X // 2 + 0.5
         else :
-            offset = (X // 2)
+            offset = (self.X // 2)
     
-        for x in range(X):
-            for y in range(Y):
+        for x in range(self.X):
+            for y in range(self.Y):
+                #Get the list of coordinates of the corners in the costmap frame
                 points_costmap = self.get_corners(x, y)
                 points_robot = points_costmap - np.array([(offset, 0, 0)])
+                
                 # Strange computation because the robot frame has the x axis toward the back of the robot
                 # and the y axis to ward the left.
                 points_robot = points_robot[:, [1,0,2]]
                 points_robot = points_robot * np.array([1,-1,1])
     
                 # Switching from the costmap coordinates to the world coordinates using the resolution of the costmap.
-                points_robot = points_robot * RESOLUTION
+                points_robot = points_robot * viz.RESOLUTION
     
                 # Compute the points coordinates in the camera frame
-                points_camera = frames.apply_rigid_motion(points_robot, CAM_TO_ROBOT)
+                points_camera = frames.apply_rigid_motion(points_robot, viz.CAM_TO_ROBOT)
     
                 # Compute the points coordinates in the image plan
-                points_image = frames.camera_frame_to_image(points_camera, K)
+                points_image = frames.camera_frame_to_image(points_camera, viz.K)
                 grid_list[y,x] = points_image
     
                 # Get the Area of the cell that is in the image
@@ -195,78 +166,120 @@ class Projection :
                 area = (points_image[0,1] - points_image[2,1]) * ((points_image[1,0]-points_image[0,0])+(points_image[2,0]-points_image[3,0]))/2
     
                 # If the area in squared pixels of the costmap cell is big enough, then relevant data can be extracted
-                if intern_area/area >= THRESHOLD_INTERSECT and area >= THRESHOLD_AREA :
+                #
+                # IMPORTANT : If there's nothing to extract because the rectangle is too small on the image,
+                # KEEP THE COORDINATES TO ZERO, this is the way we're going to check later for the pertinence of the coordinates.
+                if intern_area/area >= viz.THRESHOLD_INTERSECT and area >= viz.THRESHOLD_AREA :
 
-                    # Get the rectangle inside the points for the NN
-                    #centroid = np.mean(points_image, axis=0)
-                    #crop_width = np.int32(np.min([self.imgw,np.max(points_image[:,0])])-np.max([0,np.min(points_image[:,0])]))
-                    #crop_height = np.int32(crop_width//3)
-                    #tl_x = np.clip(centroid[0] - crop_width//2, 0, self.imgw-crop_width)
-                    #tl_y = np.clip(centroid[1]-crop_height//2, 0, self.imgh-crop_height)
-                    #rect_tl = np.int32([tl_x, tl_y])
-                    #rect_br = rect_tl + [crop_width, crop_height]
-
+                    #We project the footprint of the robot as if it was centered on the cell
+                    #We then get the smallest bounding rectangle of the footprint to keep the terrain on wich
+                    #it would step over if it was on the costmap's cell
+                    
+                    #Getting the footprint coordinates
                     centroid = np.mean(points_robot, axis=0)
-                    point_tl = centroid + [0, 0.5*L_ROBOT, 0]
-                    point_br = centroid - [0, 0.5*L_ROBOT, 0]
-                    point_tl = frames.apply_rigid_motion(point_tl, CAM_TO_ROBOT)
-                    point_br = frames.apply_rigid_motion(point_br, CAM_TO_ROBOT)
-                    point_tl = frames.camera_frame_to_image(point_tl, K)
-                    point_br = frames.camera_frame_to_image(point_br, K)
+                    point_tl = centroid + [0, 0.5*viz.L_ROBOT, 0]
+                    point_br = centroid - [0, 0.5*viz.L_ROBOT, 0]
+                    
+                    #Projecting the footprint in the image frame
+                    point_tl = frames.apply_rigid_motion(point_tl, viz.CAM_TO_ROBOT)
+                    point_br = frames.apply_rigid_motion(point_br, viz.CAM_TO_ROBOT)
+                    point_tl = frames.camera_frame_to_image(point_tl, viz.K)
+                    point_br = frames.camera_frame_to_image(point_br, viz.K)
+                    
+                    #Extracting the parameters for the rectangle
                     point_tl = point_tl[0]
                     point_br = point_br[0]
                     crop_width = np.int32(np.min([self.imgw,point_br[0]])-np.max([0,point_tl[0]]))
                     crop_height = np.int32(crop_width//3)
                     
+                    #Extracting the rectangle from the centroid of the projection of the costmap's cell
                     centroid = np.mean(points_image, axis=0)
                     tl_x = np.clip(centroid[0] - crop_width//2, 0, self.imgw-crop_width)
                     tl_y = np.clip(centroid[1]-crop_height//2, 0, self.imgh-crop_height)
                     rect_tl = np.int32([tl_x, tl_y])
                     rect_br = rect_tl + [crop_width, crop_height]
 
+                    #Appending the rectangle to the list
                     rectangle_list[y,x] = np.array([rect_tl, rect_br])
     
         return(rectangle_list, grid_list)
     
-    def predict_costs(self, img, img_depth, img_normals, rectangle_list, model, transform):
-    
-        costmap = np.zeros((Y,X))
+    def predict_costs(self, img, img_depth, img_normals, rectangle_list, model):
+        """
+        The main function of this programs, take a list of coordinates and the input image
+        Put them in the NN and compute the cost for each crop
+        Then reconstituate a costmap of costs
+
+        Args:
+            img : RGB input of the robot
+            img_depth : depth image of the robot
+            img_normals : RGB representation of the normals computed from the depth image
+            rectangle_list : list of the rectangle coordinates indicating where to crop according to the costmap's projection on the image
+            model : the NN
+        
+        Returns:
+            Costmap : A numpy array of X*Y dimension with the costs
+            max_cost, min_cost : the max and min cost of the costmap, useful for visualization later ;)
+        """
+
+        #Intializing buffers
+        costmap = np.zeros((self.Y,self.X))
         min_cost = sys.float_info.max
         max_cost = sys.float_info.min
     
     
         # Turn off gradients computation
         with torch.no_grad():
-            for x in range(X):
-                for y in range(Y) :
-                    # Convert the image from BGR to RGB
+            
+            #Iteratinf on the rectangles
+            for x in range(self.X):
+                for y in range(self.Y) :
+                    
+                    #Getting the rectangle coordinates
                     rectangle = rectangle_list[y,x]
+
+                    #Cropping the images to get the inputs we want for this perticular cell
                     crop = img[rectangle[0,1]:rectangle[1,1], rectangle[0,0]:rectangle[1,0]]
                     depth_crop = img_depth[rectangle[0,1]:rectangle[1,1], rectangle[0,0]:rectangle[1,0]]
                     normals_crop = img_normals[rectangle[0,1]:rectangle[1,1], rectangle[0,0]:rectangle[1,0]]
     
+                    #If the rectangle is not empty (Check if we considered beforehand that it was useful to crop there)
                     if not np.array_equal(rectangle, np.zeros(rectangle.shape)) :
-                        
-                        #cv2.imshow("Result", crop)
-                        #cv2.waitKey(250)
-                        #cv2.destroyAllWindows()
     
+                        #Converting the BGR image to RGB
                         crop = cv2.cvtColor(np.uint8(crop), cv2.COLOR_BGR2RGB)
+                       
                         # Make a PIL image
                         crop = PIL.Image.fromarray(crop)
+                        depth_crop = PIL.Image.fromarray(depth_crop)
+                        normals_crop = PIL.Image.fromarray(normals_crop)
+                        
                         # Apply transforms to the image
-                        crop = transform(crop)
-                        # Add a dimension of size one (to create a batch of size one)
-                        crop = torch.unsqueeze(crop, dim=0)
-                        crop = crop.to(self.device)
+                        crop = self.transform(crop)
+                        depth_crop = self.transform_depth(depth_crop)
+                        normals_crop = self.transform_normal(normals_crop)
+                        
+                        #Constructing the main image input to the format of the NN
+                        multimodal_image = torch.cat((crop, depth_crop, normals_crop)).float()
+                        multimodal_image = torch.unsqueeze(multimodal_image, dim=0)
+                        multimodal_image = multimodal_image.to(self.device)
+
+                        #Computing the fixated velocity
+                        #TODO find a way to take a variable input, or an imput of more than one velocity
+                        #to compute more costmaps and avoid the velocity dependance
+                        velocity = torch.tensor([self.velocity])
+                        velocity = velocity.to(self.device)
+                        velocity.unsqueeze_(1)
     
                         # Computing the cost from the classification problem with the help of midpoints
-                        output = model(crop, VELOCITY)
+                        output = model(multimodal_image, velocity)
                         softmax = nn.Softmax(dim=1)
                         output = softmax(output)
                         output = output.cpu()[0]
                         probs = output.numpy()
                         cost = np.dot(probs,self.midpoints)[0]
+                        
+                        #Filling the output array (the numeric costmap)
                         costmap[y,x] = cost
                         if cost < min_cost :
                             min_cost = cost
@@ -275,111 +288,216 @@ class Projection :
         
         return(costmap, min_cost, max_cost)
     
-    def visualize(self, img, costmap, rectangle_list, grid_list, max_cost, min_cost) :
+    def display(self, img, costmap, rectangle_list, grid_list, max_cost, min_cost) :
+        """
+        A function that displays what's currently computed
+
+        Args :
+            img : the base image
+            costmap : the numerical costmap
+            rectangle_list : the list of the coordinates of the cropping rectangles for the NN input
+            gris_list : the list of the coordinates of the projected costmap's cells
+            max_cost, min_cost : the max and min cost for the color gradient
+        
+        Returns :
+            Displays a bunch of windows with funny colors on it, but nothing else.
+        """
+
+        #Buffers initialization
         imgviz = img.copy()
-        costmapviz = np.zeros((Y,X,3), np.uint8)
+        costmapviz = np.zeros((self.Y,self.X,3), np.uint8)
     
-        for x in range(X):
-            for y in range(Y):
+        #For each costmap element
+        for x in range(self.X):
+            for y in range(self.Y):
+
+                #Getting the rectangle coordinate
                 rectangle = rectangle_list[y,x]
+
+                #Checking if we estimated beforehand that the rectangle might have something interesting to display
                 if not np.array_equal(rectangle, np.zeros(rectangle.shape)) :
+
+                    #If there's something we get the coordinates of the cell and the rectangle
                     rect_tl, rect_br = rectangle[0], rectangle[1]
                     points_image = grid_list[y,x]
     
-                    # Displaying the results for validation on the main image
+                    #Display the center of the cell
                     centroid = np.mean(points_image, axis=0)
                     cv2.circle(imgviz, tuple(np.int32(centroid)) , radius=4, color=(255,0,0), thickness=-1)
+                    
+                    # Displaying the rectangle
                     rect_tl = tuple(rect_tl)
                     rect_br = tuple(rect_br)
                     cv2.rectangle(imgviz, rect_tl, rect_br, (255,0,0), 1)
+
+                    #Display the frontiers of the cell
                     points_image_reshape = points_image.reshape((-1,1,2))
                     cv2.polylines(imgviz,np.int32([points_image_reshape]),True,(0,255,255))
     
-        for x in range(X) :
-            for y in range(Y) :
+        #Building cell per cell and array that will become our costmap visualization
+        for x in range(self.X) :
+            for y in range(self.Y) :
+                
+                #If the cell is not empty because some cost has been generated
                 if costmap[y,x]!= 0 :
+                    
+                    #Normalizing the content
                     value = np.uint8(((costmap[y,x]-min_cost)/(max_cost-min_cost))*255)
                     costmapviz[y,x] = (value, value, value)
-        costmapviz = cv2.applyColorMap(src=costmapviz, colormap=cv2.COLORMAP_JET)
-        for x in range(X) :
-            for y in range(Y) :
-                if costmap[y,x]== 0 :
+
+                else :
+                    #If nothing we leave the image black
                     costmapviz[y,x] = (0, 0, 0)
+
+        #Applying the color gradient        
+        costmapviz = cv2.applyColorMap(src=costmapviz, colormap=cv2.COLORMAP_JET)
         
+        #Displaying the results
         cv2.imshow("Result", imgviz)
-        cv2.imshow("Costmap", cv2.resize(cv2.flip(costmapviz, 0),(X*20,Y*20)))
+        cv2.imshow("Costmap", cv2.resize(cv2.flip(costmapviz, 0),(self.X*20,self.Y*20)))
         cv2.waitKey(16)   
 
-    def record(self, img, costmap, rectangle_list, grid_list, max_cost, min_cost) :
-        imgviz = img.copy()
-        costmapviz = np.zeros((Y,X,3), np.uint8)
+    def writeback(self, img, costmap, rectangle_list, grid_list, max_cost, min_cost) :
+        """
+        A function that write what's being computed frame per frame in a video
+
+        Args :
+            img : the base image
+            costmap : the numerical costmap
+            rectangle_list : the list of the coordinates of the cropping rectangles for the NN input
+            gris_list : the list of the coordinates of the projected costmap's cells
+            max_cost, min_cost : the max and min cost for the color gradient
+        
+        Returns :
+            Creates a cute video in the OUTPUT_DIR, but nothing more.
+        """
     
-        for x in range(X):
-            for y in range(Y):
+        #Buffers
+        imgviz = img.copy()
+        costmapviz = np.zeros((self.Y,self.X,3), np.uint8)
+    
+        #For each cell of the costmap
+        for x in range(self.X):
+            for y in range(self.Y):
+                
+                #Getting the rectangle coordinates
                 rectangle = rectangle_list[y,x]
+
+                #If there's something noticable to show
                 if not np.array_equal(rectangle, np.zeros(rectangle.shape)) :
+                    
+                    #Getting the rectangle's and the cell's coordinates
                     rect_tl, rect_br = rectangle[0], rectangle[1]
                     points_image = grid_list[y,x]
     
-                    # Displaying the results for validation on the main image
+                    # Displaying the centroid of the cell
                     centroid = np.mean(points_image, axis=0)
                     cv2.circle(imgviz, tuple(np.int32(centroid)) , radius=4, color=(255,0,0), thickness=-1)
+                    
+                    #Displaying the rectangle
                     rect_tl = tuple(rect_tl)
                     rect_br = tuple(rect_br)
                     cv2.rectangle(imgviz, rect_tl, rect_br, (255,0,0), 1)
+                    
+                    #Displaying the projection the cell
                     points_image_reshape = points_image.reshape((-1,1,2))
                     cv2.polylines(imgviz,np.int32([points_image_reshape]),True,(0,255,255))
     
-        for x in range(X) :
-            for y in range(Y) :
+        #Building cell per cell and array that will become our costmap visualization
+        for x in range(self.X) :
+            for y in range(self.Y) :
+                
+                #If the cell is not empty because some cost has been generated
                 if costmap[y,x]!= 0 :
+                    
+                    #Normalizing the content
                     value = np.uint8(((costmap[y,x]-min_cost)/(max_cost-min_cost))*255)
                     costmapviz[y,x] = (value, value, value)
-        costmapviz = cv2.applyColorMap(src=costmapviz, colormap=cv2.COLORMAP_JET)
-        for x in range(X) :
-            for y in range(Y) :
-                if costmap[y,x]== 0 :
-                    costmapviz[y,x] = (0, 0, 0)
 
+                else :
+                    #If nothing we leave the image black
+                    costmapviz[y,x] = (0, 0, 0)
+        
+        #Applying the color gradient        
+        costmapviz = cv2.applyColorMap(src=costmapviz, colormap=cv2.COLORMAP_JET)
+
+        #Resizing the images to fill the video frame correctly
         imgviz_resized = cv2.resize(imgviz[:,:,:3], (np.int32(self.imgw/2), np.int32(self.imgh/2)))
         costmapviz = cv2.resize(cv2.flip(costmapviz, 0),(np.int32(self.imgw/2), np.int32(self.imgh/2)))
+        
+        #Stacking the results and fill the borders
         result = np.vstack((imgviz_resized, costmapviz))
         result_borders = cv2.copyMakeBorder(result, 0, 0, np.int32(self.imgw/4), np.int32(self.imgw/4), cv2.BORDER_CONSTANT, value=(0,0,0))
+        
+        #Write the resulting frame in the video
         self.writer.write(result_borders)
 
     def callback_image(self, msg) :
+        """
+        The ROS BRG image callback
+        """
+
+        #If we have recieved the depth image
         if self.wait_for_depth == False :
+            
+            #Converting the image to OpenCV
             self.img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
 
+            #If it's the first image we're getting    
             if self.initialized == False :
+                
+                #Getting the images characteristics
                 self.imgh, self.imgw, _ = self.img.shape
+
+                #Setting up the lists of useful corrdinates
                 self.rectangle_list, self.grid_list = self.get_lists()
+                
                 self.initialized = True
 
-            costmap, min_cost, max_cost = self.predict_costs(self.img, self.img_depth, self.img_normals, self.rectangle_list, self.model, self.transform)
+            #Building the costmap
+            costmap, min_cost, max_cost = self.predict_costs(self.img, self.img_depth, self.img_normals, self.rectangle_list, self.model)
+            
+            #Updating the cost history (for diplay purpose)
             if self.min_cost_global > min_cost :
                 self.min_cost_global = min_cost
             if self.max_cost_global < max_cost :
                 self.max_cost_global = max_cost
 
-            if VISUALIZE :
-                self.visualize(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+            #Display if necessary
+            if self.visualize :
+                self.display(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
 
-            if RECORD :
-                self.record(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+            #Record if necessary
+            if self.record :
+                self.writeback(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
+                print("recorded frame")
 
         self.wait_for_depth = True
 
     def callback_depth(self, msg_depth) :
+        """
+        The ROS Depth image callback
+        """
+
+        #If we're waiting for a depth image for the inferance
         if self.wait_for_depth == True :
+            
+            #Convert the image to OpenCV
             self.img_depth = self.bridge.imgmsg_to_cv2(msg_depth, desired_encoding="passthrough")
-            depthclass = depth.Depth(self.img_depth, dataset.DEPTH_RANGE)
-            depthclass.compute_normal(K = robot.K, bilateral_filter = dataset.BILATERAL_FILTER, gradient_threshold = dataset.GRADIENT_THR)
+            
+            #Copy for edit permission T_T
+            depthcopy = self.img_depth.copy()
 
+            #Using a Depth class to compute the normals and fill the holes in the depth image
+            depthclass = depth.Depth(depthcopy, dataset.DEPTH_RANGE)
+            depthclass.compute_normal(K = viz.K, bilateral_filter = dataset.BILATERAL_FILTER, gradient_threshold = dataset.GRADIENT_THR)
+
+            #Setting the attribute to the resulting depth and normals
             self.img_depth = depthclass.get_depth(fill = True, default_depth=dataset.DEPTH_RANGE[0], convert_range=True)
-
             self.img_normals = depthclass.get_normal(fill = True, default_normal = dataset.DEFAULT_NORMAL, convert_range = True)
             self.img_normals = cv2.cvtColor(self.img_normals, cv2.COLOR_BGR2RGB)
+            
+            #Signal that we're not waiting for a depth image
             self.wait_for_depth = False
 
 
@@ -391,6 +509,6 @@ if __name__ == "__main__" :
     projection = Projection()
 
     rospy.spin()
-    if RECORD :
+    if projection.record :
         projection.writer.release()
     cv2.destroyAllWindows()

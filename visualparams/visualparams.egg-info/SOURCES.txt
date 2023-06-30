@@ -1,0 +1,5 @@
+setup.py
+visualparams.egg-info/PKG-INFO
+visualparams.egg-info/SOURCES.txt
+visualparams.egg-info/dependency_links.txt
+visualparams.egg-info/top_level.txt

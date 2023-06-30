@@ -1,0 +1,16 @@
+Metadata-Version: 1.1
+Name: visualparams
+Version: 0.0.1
+Summary: Parameters for the visual_traversability ROS Node
+Home-page: UNKNOWN
+Author: Gabriel Métois
+Author-email: <gabriel.metois@ensta-paris.fr>
+License: UNKNOWN
+Description: UNKNOWN
+Keywords: ROS,parameters,pytorch
+Platform: UNKNOWN
+Classifier: Development Status :: 1 - Planning
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: POSIX :: Linux
