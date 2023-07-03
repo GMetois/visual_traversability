@@ -39,19 +39,24 @@ RESOLUTION = 0.20
 # Parameters relative to the rosbag input
 IMAGE_H, IMAGE_W = 720, 1080
 IMAGE_TOPIC = robot.IMAGE_TOPIC
+IMAGE_RATE = robot.CAMERA_SAMPLE_RATE
 ODOM_TOPIC = robot.ODOM_TOPIC
+ODOM_RATE = robot.ODOM_SAMPLE_RATE
 DEPTH_TOPIC = robot.DEPTH_TOPIC
+DEPTH_RATE = robot.DEPTH_SAMPLE_RATE
+NB_MESSAGES_THR = dataset.NB_MESSAGES_THR
 INPUT_DIR = ""
 
 # Parameters relative to the video recording
 OUTPUT_DIR = "/home/gabriel/output.avi"
-VISUALIZE = True
-RECORD = False
+VISUALIZE = False
+RECORD = True
+LIVE = False
 
 # Parameters relative to the model
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL = ResNet18Velocity.ResNet18Velocity(**learning.NET_PARAMS).to(device=DEVICE)
-WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity/2023-06-28-16-39-21.params"
+WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity_Augmented/network.params"
 
 CROP_WIDTH = 210
 CROP_HEIGHT = 70

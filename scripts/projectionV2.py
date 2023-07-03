@@ -1,6 +1,7 @@
 # ROS - Python librairies
 import rospy
 import cv_bridge
+import rosbag
 
 # Import useful ROS types
 from sensor_msgs.msg import Image
@@ -10,7 +11,6 @@ import numpy as np
 import cv2
 import torch
 import torch.nn as nn
-from torchvision import transforms
 import PIL
 import sys
 
@@ -29,7 +29,8 @@ class Projection :
     DEPTH_TOPIC = viz.DEPTH_TOPIC
     imgh = viz.IMAGE_H
     imgw = viz.IMAGE_W
-    
+    bag = None
+
     # Costmap parameters
     X = viz.X
     Y = viz.Y
@@ -75,8 +76,12 @@ class Projection :
         #INITIALIZATION
         #img = cv2.imread(IMG_DIR, cv2.IMREAD_COLOR)
         #self.rectangle_list, self.grid_list = self.get_lists()
-        self.sub_image = rospy.Subscriber(self.IMAGE_TOPIC, Image, self.callback_image, queue_size=1)
-        self.sub_depth = rospy.Subscriber(self.DEPTH_TOPIC, Image, self.callback_depth, queue_size=1)
+        if viz.LIVE == True :
+            self.sub_image = rospy.Subscriber(self.IMAGE_TOPIC, Image, self.callback_image, queue_size=1)
+            self.sub_depth = rospy.Subscriber(self.DEPTH_TOPIC, Image, self.callback_depth, queue_size=1)
+        else :
+            self.bag = rosbag.Bag(viz.INPUT_DIR)
+        
         if self.record :
             self.writer = cv2.VideoWriter(viz.OUTPUT_DIR, cv2.VideoWriter_fourcc(*'XVID'), 24, (1920,1080))
 
@@ -500,6 +505,34 @@ class Projection :
             #Signal that we're not waiting for a depth image
             self.wait_for_depth = False
 
+def is_bag_healthy(bag: str) -> bool:
+    """Check if a bag file is healthy
+
+    Args:
+        bag (str): Path to the bag file
+
+    Returns:
+        bool: True if the bag file is healthy, False otherwise
+    """    
+    # Get the bag file duration
+    duration = bag.get_end_time() - bag.get_start_time()  # [seconds]
+
+    for topic, frequency in [(viz.IMAGE_TOPIC,
+                              viz.IMAGE_RATE),
+                             (viz.DEPTH_TOPIC,
+                              viz.DEPTH_RATE),
+                             (viz.ODOM_TOPIC,
+                              viz.ODOM_RATE)] :
+
+        # Get the number of messages in the bag file
+        nb_messages = bag.get_message_count(topic)
+        
+        # Check if the number of messages is consistent with the frequency
+        if np.abs(nb_messages - frequency*duration)/(frequency*duration) >\
+                viz.NB_MESSAGES_THR:
+            return False
+
+    return True
 
 # Main Program for testing
 
@@ -509,6 +542,7 @@ if __name__ == "__main__" :
     projection = Projection()
 
     rospy.spin()
+    
     if projection.record :
         projection.writer.release()
     cv2.destroyAllWindows()
