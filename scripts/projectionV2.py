@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import PIL
 import sys
+from tqdm import tqdm
 
 # Importing custom made parameters
 from depth import utils as depth
@@ -29,14 +30,12 @@ class Projection :
     DEPTH_TOPIC = viz.DEPTH_TOPIC
     imgh = viz.IMAGE_H
     imgw = viz.IMAGE_W
+    live = viz.LIVE
     bag = None
 
     # Costmap parameters
     X = viz.X
     Y = viz.Y
-    
-    # Initializing some PyTorch related parameters
-    print("Device: ", viz.DEVICE, "\n")
     
     # Initializing some parameters for the model
     transform = viz.TRANSFORM
@@ -69,18 +68,18 @@ class Projection :
     max_cost_global = sys.float_info.min
     wait_for_depth = True
 
-    ###### TO INSERT
-
 
     def __init__(self) :
+        
         #INITIALIZATION
-        #img = cv2.imread(IMG_DIR, cv2.IMREAD_COLOR)
-        #self.rectangle_list, self.grid_list = self.get_lists()
         if viz.LIVE == True :
             self.sub_image = rospy.Subscriber(self.IMAGE_TOPIC, Image, self.callback_image, queue_size=1)
             self.sub_depth = rospy.Subscriber(self.DEPTH_TOPIC, Image, self.callback_depth, queue_size=1)
         else :
             self.bag = rosbag.Bag(viz.INPUT_DIR)
+            if not self.is_bag_healthy() :
+                print("Rosbag not healthy, cannot open")
+                self.bag = None
         
         if self.record :
             self.writer = cv2.VideoWriter(viz.OUTPUT_DIR, cv2.VideoWriter_fourcc(*'XVID'), 24, (1920,1080))
@@ -438,8 +437,7 @@ class Projection :
         self.writer.write(result_borders)
 
     def callback_image(self, msg) :
-        """
-        The ROS BRG image callback
+        """The ROS BRG image callback
         """
 
         #If we have recieved the depth image
@@ -447,18 +445,15 @@ class Projection :
             
             #Converting the image to OpenCV
             self.img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-
+           
             #If it's the first image we're getting    
             if self.initialized == False :
-                
                 #Getting the images characteristics
                 self.imgh, self.imgw, _ = self.img.shape
-
                 #Setting up the lists of useful corrdinates
                 self.rectangle_list, self.grid_list = self.get_lists()
-                
                 self.initialized = True
-
+            
             #Building the costmap
             costmap, min_cost, max_cost = self.predict_costs(self.img, self.img_depth, self.img_normals, self.rectangle_list, self.model)
             
@@ -467,72 +462,81 @@ class Projection :
                 self.min_cost_global = min_cost
             if self.max_cost_global < max_cost :
                 self.max_cost_global = max_cost
-
+            
             #Display if necessary
             if self.visualize :
                 self.display(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
-
+            
             #Record if necessary
             if self.record :
                 self.writeback(self.img, costmap, self.rectangle_list, self.grid_list, max_cost, min_cost)
-                print("recorded frame")
-
+        
         self.wait_for_depth = True
 
     def callback_depth(self, msg_depth) :
+        """The ROS Depth image callback
         """
-        The ROS Depth image callback
-        """
-
         #If we're waiting for a depth image for the inferance
         if self.wait_for_depth == True :
             
             #Convert the image to OpenCV
             self.img_depth = self.bridge.imgmsg_to_cv2(msg_depth, desired_encoding="passthrough")
             
-            #Copy for edit permission T_T
-            depthcopy = self.img_depth.copy()
-
-            #Using a Depth class to compute the normals and fill the holes in the depth image
-            depthclass = depth.Depth(depthcopy, dataset.DEPTH_RANGE)
-            depthclass.compute_normal(K = viz.K, bilateral_filter = dataset.BILATERAL_FILTER, gradient_threshold = dataset.GRADIENT_THR)
-
-            #Setting the attribute to the resulting depth and normals
-            self.img_depth = depthclass.get_depth(fill = True, default_depth=dataset.DEPTH_RANGE[0], convert_range=True)
-            self.img_normals = depthclass.get_normal(fill = True, default_normal = dataset.DEFAULT_NORMAL, convert_range = True)
-            self.img_normals = cv2.cvtColor(self.img_normals, cv2.COLOR_BGR2RGB)
+            self.compute_depth()
             
             #Signal that we're not waiting for a depth image
             self.wait_for_depth = False
 
-def is_bag_healthy(bag: str) -> bool:
-    """Check if a bag file is healthy
+    def compute_depth(self) :
+        """Process the depth image and compute the normals
 
-    Args:
-        bag (str): Path to the bag file
-
-    Returns:
-        bool: True if the bag file is healthy, False otherwise
-    """    
-    # Get the bag file duration
-    duration = bag.get_end_time() - bag.get_start_time()  # [seconds]
-
-    for topic, frequency in [(viz.IMAGE_TOPIC,
-                              viz.IMAGE_RATE),
-                             (viz.DEPTH_TOPIC,
-                              viz.DEPTH_RATE),
-                             (viz.ODOM_TOPIC,
-                              viz.ODOM_RATE)] :
-
-        # Get the number of messages in the bag file
-        nb_messages = bag.get_message_count(topic)
+        Args :
+            None
         
-        # Check if the number of messages is consistent with the frequency
-        if np.abs(nb_messages - frequency*duration)/(frequency*duration) >\
-                viz.NB_MESSAGES_THR:
-            return False
+        Returns :
+            None but fills the img_normals and the img_depth of the class   
+        """
 
-    return True
+        #Copy for edit permission T_T
+        depthcopy = self.img_depth.copy()
+        
+        #Using a Depth class to compute the normals and fill the holes in the depth image
+        depthclass = depth.Depth(depthcopy, dataset.DEPTH_RANGE)
+        depthclass.compute_normal(K = viz.K, bilateral_filter = dataset.BILATERAL_FILTER, gradient_threshold = dataset.GRADIENT_THR)
+        
+        #Setting the attribute to the resulting depth and normals
+        self.img_depth = depthclass.get_depth(fill = True, default_depth=dataset.DEPTH_RANGE[0], convert_range=True)
+        self.img_normals = depthclass.get_normal(fill = True, default_normal = dataset.DEFAULT_NORMAL, convert_range = True)
+        self.img_normals = cv2.cvtColor(self.img_normals, cv2.COLOR_BGR2RGB)
+
+    def is_bag_healthy(self) -> bool:
+        """Check if a bag file is healthy
+
+        Args:
+            bag (str): Path to the bag file
+
+        Returns:
+            bool: True if the bag file is healthy, False otherwise
+        """    
+        # Get the bag file duration
+        duration = self.bag.get_end_time() - self.bag.get_start_time()  # [seconds]
+
+        for topic, frequency in [(viz.IMAGE_TOPIC,
+                                  viz.IMAGE_RATE),
+                                 (viz.DEPTH_TOPIC,
+                                  viz.DEPTH_RATE),
+                                 (viz.ODOM_TOPIC,
+                                  viz.ODOM_RATE)] :
+
+            # Get the number of messages in the bag file
+            nb_messages = self.bag.get_message_count(topic)
+
+            # Check if the number of messages is consistent with the frequency
+            if np.abs(nb_messages - frequency*duration)/(frequency*duration) >\
+                    viz.NB_MESSAGES_THR:
+                return False
+
+        return True
 
 # Main Program for testing
 
@@ -540,6 +544,78 @@ if __name__ == "__main__" :
     rospy.init_node("ProjectionV2")
 
     projection = Projection()
+
+    print("-------------------- VISUAL_TRAVERSABILITY EVALUATION NODE --------------------")
+    print("Device : ", projection.device)
+    print("Using a live broadcasted rosbag : ", projection.live)
+    print("Visualizing the output: ", projection.visualize)
+    print("Recording the output in a video: ", projection.record)
+    print("-------------------------------------------------------------------------------")
+
+    # If we work on a recorded rosbag
+    if not projection.live :
+
+        for _, msg_image, t_image in tqdm(projection.bag.read_messages(topics=[projection.IMAGE_TOPIC]), total=projection.bag.get_message_count(projection.IMAGE_TOPIC)) :
+
+            projection.img = projection.bridge.imgmsg_to_cv2(msg_image, desired_encoding="passthrough")
+
+            # Keep only the images that can be matched with a depth image
+            if list(projection.bag.read_messages(
+                topics=[viz.DEPTH_TOPIC],
+                start_time=t_image - rospy.Duration(
+                    viz.TIME_DELTA),
+                end_time=t_image + rospy.Duration(
+                    viz.TIME_DELTA))):
+                
+                # Find the depth image whose timestamp is closest to that
+                # of the rgb image
+                min_t = viz.TIME_DELTA
+                
+                # Go through the depth topic
+                for _, msg_depth_i, t_depth in projection.bag.read_messages(
+                    topics=[projection.DEPTH_TOPIC],
+                    start_time=t_image - rospy.Duration(viz.TIME_DELTA),
+                    end_time=t_image + rospy.Duration(viz.TIME_DELTA)):
+                    
+                    # Keep the depth image whose timestamp is closest to
+                    # that of the rgb image
+                    if np.abs(t_depth.to_sec()-t_image.to_sec()) < min_t:
+                        min_t = np.abs(t_depth.to_sec() - t_image.to_sec())
+                        projection.img_depth = projection.bridge.imgmsg_to_cv2(msg_depth_i, desired_encoding="passthrough")
+            
+            # If no depth image is found, skip the current image
+            else:
+                continue
+
+            projection.compute_depth()
+
+            #If it's the first image we're getting    
+            if projection.initialized == False :
+                #Getting the images characteristics
+                projection.imgh, projection.imgw, _ = projection.img.shape
+                #Setting up the lists of useful corrdinates
+                projection.rectangle_list, projection.grid_list = projection.get_lists()
+                projection.initialized = True
+            
+            #Building the costmap
+            costmap, min_cost, max_cost = projection.predict_costs(projection.img, projection.img_depth, projection.img_normals, projection.rectangle_list, projection.model)
+            
+            #Updating the cost history (for diplay purpose)
+            if projection.min_cost_global > min_cost :
+                projection.min_cost_global = min_cost
+            if projection.max_cost_global < max_cost :
+                projection.max_cost_global = max_cost
+            
+            #Display if necessary
+            if projection.visualize :
+                projection.display(projection.img, costmap, projection.rectangle_list, projection.grid_list, max_cost, min_cost)
+            
+            #Record if necessary
+            if projection.record :
+                projection.writeback(projection.img, costmap, projection.rectangle_list, projection.grid_list, max_cost, min_cost)
+        
+        projection.bag.close()
+        print("Job done")
 
     rospy.spin()
     

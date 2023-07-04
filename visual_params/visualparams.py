@@ -45,7 +45,8 @@ ODOM_RATE = robot.ODOM_SAMPLE_RATE
 DEPTH_TOPIC = robot.DEPTH_TOPIC
 DEPTH_RATE = robot.DEPTH_SAMPLE_RATE
 NB_MESSAGES_THR = dataset.NB_MESSAGES_THR
-INPUT_DIR = ""
+TIME_DELTA = dataset.TIME_DELTA
+INPUT_DIR = "/home/gabriel/PRE/bagfiles/raw_bagfiles/ENSTA_Campus/tom_2023-05-30-13-25-39_0.bag"
 
 # Parameters relative to the video recording
 OUTPUT_DIR = "/home/gabriel/output.avi"
