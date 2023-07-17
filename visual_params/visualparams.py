@@ -57,7 +57,7 @@ LIVE = False
 # Parameters relative to the model
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL = ResNet18Velocity.ResNet18Velocity(**learning.NET_PARAMS).to(device=DEVICE)
-WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity_Augmented/network.params"
+WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity/network.params"
 
 CROP_WIDTH = 210
 CROP_HEIGHT = 70
@@ -65,7 +65,7 @@ NORMALIZE_PARAMS = learning.NORMALIZE_PARAMS
 TRANSFORM = ResNet18Velocity.test_transform
 TRANSFORM_DEPTH = ResNet18Velocity.transform_depth
 TRANSFORM_NORMAL = ResNet18Velocity.transform_normal
-MIDPOINTS = np.array([[0.43156512],[0.98983318],[1.19973744],[1.35943443],[1.51740755],[1.67225206],[1.80821536],[1.94262708],[2.12798895],[2.6080252]])
+MIDPOINTS = np.load("/home/gabriel/PRE/datasets/dataset_multimodal_siamese_png_quantilebinning/bins_midpoints.npy")
 VELOCITY = 0.2
 
 # Paremeters relative to the video treatment

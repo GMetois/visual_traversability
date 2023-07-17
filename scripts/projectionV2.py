@@ -30,7 +30,7 @@ class Projection :
     DEPTH_TOPIC = viz.DEPTH_TOPIC
     imgh = viz.IMAGE_H
     imgw = viz.IMAGE_W
-    live = viz.LIVE
+    live = False
     bag = None
 
     # Costmap parameters
@@ -60,8 +60,8 @@ class Projection :
     grid_list = np.zeros((Y,X,4,2), np.int32)
     
     #Control variables
-    record = viz.RECORD
-    visualize = viz.VISUALIZE
+    record = False
+    visualize = True
     initialized = False
     time_wait = 250
     min_cost_global = sys.float_info.max
