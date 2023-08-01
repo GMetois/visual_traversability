@@ -21,6 +21,7 @@ from params import dataset
 from depth import utils as depth
 import utilities.frames as frames
 from exportedmodels import ResNet18Velocity
+from exportedmodels import ResNet18Velocity_Regression_V2
 
 # Importing parameters relative to the robot size and configuration
 ALPHA = robot.alpha
@@ -50,14 +51,22 @@ INPUT_DIR = "/home/gabriel/PRE/bagfiles/raw_bagfiles/ENSTA_Campus/tom_2023-05-30
 
 # Parameters relative to the video recording
 OUTPUT_DIR = "/home/gabriel/output.avi"
-VISUALIZE = False
-RECORD = True
+VISUALIZE = True
+RECORD = False
 LIVE = False
 
 # Parameters relative to the model
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL = ResNet18Velocity.ResNet18Velocity(**learning.NET_PARAMS).to(device=DEVICE)
-WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity/network.params"
+REGRESSION = True
+if REGRESSION == True :
+    MODEL = ResNet18Velocity_Regression_V2.ResNet18Velocity_Regression_V2(nb_input_channels=learning.NET_PARAMS["nb_input_channels"],
+                                                                    nb_input_features=learning.NET_PARAMS["nb_input_features"],
+                                                                    nb_classes=1).to(device=DEVICE)
+else :
+    MODEL = ResNet18Velocity.ResNet18Velocity(nb_input_channels=learning.NET_PARAMS["nb_input_channels"],
+                                              nb_input_features=learning.NET_PARAMS["nb_input_features"],
+                                              nb_classes=learning.NET_PARAMS["nb_classes"]).to(device=DEVICE)
+WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity_Regression_V2/terrain_samples_filtered.params"
 
 CROP_WIDTH = 210
 CROP_HEIGHT = 70
@@ -65,7 +74,13 @@ NORMALIZE_PARAMS = learning.NORMALIZE_PARAMS
 TRANSFORM = ResNet18Velocity.test_transform
 TRANSFORM_DEPTH = ResNet18Velocity.transform_depth
 TRANSFORM_NORMAL = ResNet18Velocity.transform_normal
-MIDPOINTS = np.load("/home/gabriel/PRE/datasets/dataset_multimodal_siamese_png_quantilebinning/bins_midpoints.npy")
+
+DATASET = "/home/gabriel/PRE/datasets/dataset_multimodal_siamese_png_filtered_hard"
+if REGRESSION == False :
+    MIDPOINTS = np.load(DATASET + "/bins_midpoints.npy")
+else :
+    MIDPOINTS = None
+
 VELOCITY = 0.2
 
 # Paremeters relative to the video treatment

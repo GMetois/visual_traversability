@@ -277,11 +277,15 @@ class Projection :
     
                         # Computing the cost from the classification problem with the help of midpoints
                         output = model(multimodal_image, velocity)
-                        softmax = nn.Softmax(dim=1)
-                        output = softmax(output)
+                        if self.midpoints != None :
+                            softmax = nn.Softmax(dim=1)
+                            output = softmax(output)
                         output = output.cpu()[0]
                         probs = output.numpy()
-                        cost = np.dot(probs,self.midpoints)[0]
+                        if self.midpoints != None : 
+                            cost = np.dot(probs,self.midpoints)
+                        else :
+                            cost = probs
                         
                         #Filling the output array (the numeric costmap)
                         costmap[y,x] = cost
