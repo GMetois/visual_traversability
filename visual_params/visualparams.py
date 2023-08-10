@@ -47,7 +47,7 @@ DEPTH_TOPIC = robot.DEPTH_TOPIC
 DEPTH_RATE = robot.DEPTH_SAMPLE_RATE
 NB_MESSAGES_THR = dataset.NB_MESSAGES_THR
 TIME_DELTA = dataset.TIME_DELTA
-INPUT_DIR = "/home/gabriel/PRE/bagfiles/raw_bagfiles/ENSTA_Campus/tom_2023-05-30-13-25-39_0.bag"
+INPUT_DIR = "/home/gabriel/PRE/bagfiles/raw_bagfiles/ENSTA_Campus/tom_2023-05-30-13-28-39_1.bag"
 
 # Parameters relative to the video recording
 OUTPUT_DIR = "/home/gabriel/output.avi"
@@ -66,7 +66,7 @@ else :
     MODEL = ResNet18Velocity.ResNet18Velocity(nb_input_channels=learning.NET_PARAMS["nb_input_channels"],
                                               nb_input_features=learning.NET_PARAMS["nb_input_features"],
                                               nb_classes=learning.NET_PARAMS["nb_classes"]).to(device=DEVICE)
-WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity_Regression_V2/terrain_samples_filtered.params"
+WEIGHTS = "/home/gabriel/catkin_ws/src/visual_traversability/Parameters/ResNet18Velocity_Regression_V2/total_filtered_hard.params"
 
 CROP_WIDTH = 210
 CROP_HEIGHT = 70
